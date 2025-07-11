@@ -2,7 +2,15 @@ use std::error::Error;
 use std::fs;
 use std::path::{Path, PathBuf};
 
-pub fn mosaic_dir() -> Result<PathBuf, Box<dyn Error>> {
+pub struct Paths {
+    pub base: PathBuf,
+    pub master_key: PathBuf,
+    pub bootstrap: PathBuf,
+    pub profile: PathBuf,
+    pub key_schedule: PathBuf,
+}
+
+pub fn paths() -> Result<Paths, Box<dyn Error>> {
     // Normalize their data dir
     let mut data_dir = normalize(
         dirs::data_dir()
@@ -18,7 +26,20 @@ pub fn mosaic_dir() -> Result<PathBuf, Box<dyn Error>> {
     // Create the directory if it does not already exist
     fs::create_dir_all(&data_dir)?;
 
-    Ok(data_dir)
+    let mut paths = Paths {
+        base: data_dir.clone(),
+        master_key: data_dir.clone(),
+        bootstrap: data_dir.clone(),
+        profile: data_dir.clone(),
+        key_schedule: data_dir.clone(),
+    };
+
+    paths.master_key.push("master_key.mocryptsec0");
+    paths.bootstrap.push("bootstrap.mub25");
+    paths.profile.push("profile.morec");
+    paths.key_schedule.push("key_schedule.morec");
+
+    Ok(paths)
 }
 
 #[cfg(not(windows))]
