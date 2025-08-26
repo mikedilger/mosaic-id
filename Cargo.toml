@@ -1,14 +1,13 @@
 [package]
-name = "mosaic-tool"
+name = "mosaic-id"
 version = "0.1.0"
 edition = "2024"
 authors = ["Mike Dilger <mike@mikedilger.com>"]
-description = "Command line tool for mosaic"
+description = "Command line tool for mosaic ID management"
 keywords = [ "mosaic" ]
 license = "MIT"
 
 [dependencies]
-clap = { version = "4.5", features = [ "derive" ] }
 colorful = "0.3"
 dirs = "6.0"
 mosaic-core = { git = "https://github.com/mikedilger/mosaic-core", branch = "master" }
