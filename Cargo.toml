@@ -9,6 +9,7 @@ license = "MIT"
 
 [dependencies]
 colorful = "0.3"
+crossterm = "0.29"
 dialoguer = "0.12"
 dirs = "6.0"
 mosaic-core = { git = "https://github.com/mikedilger/mosaic-core", branch = "master", features = [ "serde" ] }

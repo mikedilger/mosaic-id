@@ -1,6 +1,9 @@
 use std::error::Error;
 use std::fs;
+use std::io::Write;
 use std::path::{Path, PathBuf};
+
+use crossterm::event::{Event, KeyCode};
 use serde::{Serialize, Deserialize};
 
 use mosaic_core::{EncryptedSecretKey, UserBootstrap};
@@ -21,7 +24,6 @@ pub struct Data {
 
 fn main() -> Result<(), Box<dyn Error>> {
     let config_file = data_path()?;
-
 
     let mut data: Data = if config_file.exists() {
         let contents = fs::read(&config_file)?;
@@ -83,6 +85,31 @@ pub enum MenuOption {
 }
 
 impl MenuOption {
+    pub fn key(&self) -> KeyCode {
+        match self {
+            Self::NewMaster => KeyCode::Char('m'),
+            Self::DestroyMaster => KeyCode::Char('x'),
+            Self::NewBootstrap => KeyCode::Char('b'),
+            Self::NewProfile => KeyCode::Char('p'),
+            Self::NewKeySchedule => KeyCode::Char('k'),
+            Self::SaveAndExit => KeyCode::Char('s'),
+            Self::ExitWithoutSaving => KeyCode::Char('q'),
+        }
+    }
+
+    pub fn from_key(k: KeyCode) -> Option<MenuOption> {
+        match k {
+            KeyCode::Char('m') => Some(Self::NewMaster),
+            KeyCode::Char('x') => Some(Self::DestroyMaster),
+            KeyCode::Char('b') => Some(Self::NewBootstrap),
+            KeyCode::Char('p') => Some(Self::NewProfile),
+            KeyCode::Char('k') => Some(Self::NewKeySchedule),
+            KeyCode::Char('s') => Some(Self::SaveAndExit),
+            KeyCode::Char('q') => Some(Self::ExitWithoutSaving),
+            _ => None,
+        }
+    }
+
     pub fn prompt(&self) -> &'static str {
         match self {
             Self::NewMaster => "Generate a new Master Keypair",
@@ -90,57 +117,108 @@ impl MenuOption {
             Self::NewBootstrap => "Generate a new empty Bootstrap",
             Self::NewProfile => "Generate a new empty Profile",
             Self::NewKeySchedule => "Generate a new empty Key Schedule",
-            Self::SaveAndExit => "Save and Exit",
-            Self::ExitWithoutSaving => "Exit Without Saving",
+            Self::SaveAndExit => "Save and Quit",
+            Self::ExitWithoutSaving => "Quit Without Saving",
         }
     }
 }
 
+pub fn options_from_data(data: &Data) -> Vec<MenuOption> {
+    let mut options: Vec<MenuOption> = Vec::new();
 
-pub fn update(data: &mut Data, config_file: PathBuf) -> Result<(), Box<dyn Error>> {
+    if let Some(_) = data.encrypted_master_key {
+        options.push(MenuOption::DestroyMaster);
 
-    loop {
-        let mut options: Vec<MenuOption> = Vec::new();
-
-        if let Some(_) = data.encrypted_master_key {
-            options.push(MenuOption::DestroyMaster);
-        } else {
-            options.push(MenuOption::NewMaster);
-        }
-
-        if let Some(ref mut _bootstrap) = data.bootstrap {
+        if let Some(ref _bootstrap) = data.bootstrap {
         } else {
             options.push(MenuOption::NewBootstrap);
         }
 
-        options.push(MenuOption::SaveAndExit);
-        options.push(MenuOption::ExitWithoutSaving);
+        if let Some(ref _profile) = data.profile {
+        } else {
+            options.push(MenuOption::NewProfile);
+        }
 
+        if let Some(ref _key_schedule) = data.profile {
+        } else {
+            options.push(MenuOption::NewKeySchedule);
+        }
+    } else {
+        options.push(MenuOption::NewMaster);
+    }
 
-        match menu(data, options)? {
-            None => continue,
-            Some(true) => {
-                let contents: String = serde_json::to_string(&data)?;
-                fs::write(&config_file, contents)?;
-                break;
-            },
-            Some(false) => {
-                break;
-            },
+    options.push(MenuOption::SaveAndExit);
+    options.push(MenuOption::ExitWithoutSaving);
+
+    options
+}
+
+pub fn update(data: &mut Data, config_file: PathBuf) -> Result<(), Box<dyn Error>> {
+    let mut stdout = std::io::stdout();
+
+    'next_menu:
+    loop {
+        let options = options_from_data(&*data);
+
+        println!("\n-----------------------------------");
+        for option in options.iter() {
+            println!("{}) {}", option.key(), option.prompt());
+        }
+        print!("> ");
+        stdout.flush()?;
+
+        'next_keypress:
+        loop {
+            match crossterm::event::read()? {
+                Event::Key(key_event) => {
+                    if let Some(option) = MenuOption::from_key(key_event.code) {
+                        println!("");
+                        if execute(option, data, config_file.as_path())? {
+                            return Ok(());
+                        }
+                        continue 'next_menu;
+                    } else {
+                        continue 'next_keypress;
+                    }
+                },
+                _ => continue 'next_keypress,
+            }
+        }
+    }
+}
+
+// Return value 'true' means exit
+pub fn execute(
+    option: MenuOption,
+    data: &mut Data,
+    config_file: &Path
+) -> Result<bool,  Box<dyn Error>> {
+    match option {
+        MenuOption::NewMaster => {
+            println!("New Master - not yet implemented.");
+        }
+        MenuOption::DestroyMaster => {
+            println!("Destroy Master - not yet implemented.");
+        }
+        MenuOption::NewBootstrap => {
+            println!("New Bootstrap - not yet implemented.");
+        }
+        MenuOption::NewProfile => {
+            println!("New Profile - not yet implemented.");
+        }
+        MenuOption::NewKeySchedule => {
+            println!("New Key Schedule - not yet implemented.");
+        }
+        MenuOption::SaveAndExit => {
+            let contents: String = serde_json::to_string(&data)?;
+            fs::write(&config_file, contents)?;
+            println!("Saved.");
+            return Ok(true);
+        }
+        MenuOption::ExitWithoutSaving => {
+            return Ok(true);
         }
     }
 
-    Ok(())
-}
-
-
-// return Some(true) to save and exit, Some(false) to exit without saving
-pub fn menu(_data: &mut Data, options: Vec<MenuOption>) -> Result<Option<bool>, Box<dyn Error>> {
-    for (i, option) in options.iter().enumerate() {
-        println!("{i}) {}", option.prompt());
-    }
-
-    // Cheat while testing
-    return Ok(Some(true));
-
+    Ok(false)
 }
