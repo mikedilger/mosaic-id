@@ -4,9 +4,9 @@ use std::io::{self, BufRead, Write};
 use std::path::{Path, PathBuf};
 
 use crossterm::event::{Event, KeyCode};
-use serde::{Serialize, Deserialize};
+use serde::{Deserialize, Serialize};
 
-use mosaic_core::{EncryptedSecretKey, SecretKey, UserBootstrap};
+use mosaic_core::{EncryptedSecretKey, PublicKey, SecretKey, UserBootstrap};
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize)]
 pub struct UserProfile; // define in mosaic-core
@@ -46,15 +46,14 @@ fn main() -> Result<(), Box<dyn Error>> {
         secret_key: None,
     };
 
-    update(params)?;
+    run_main_menu(params)?;
 
     Ok(())
 }
 
 fn data_path() -> Result<PathBuf, Box<dyn Error>> {
     let mut data_dir = normalize(
-        dirs::data_dir()
-            .ok_or(Box::<dyn Error>::from("Cannot determine data directory"))?
+        dirs::data_dir().ok_or(Box::<dyn Error>::from("Cannot determine data directory"))?,
     );
 
     // Add "mosaic" to the end
@@ -86,79 +85,75 @@ fn normalize<P: AsRef<Path>>(path: P) -> PathBuf {
     }
 }
 
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Hash)]
 pub enum MenuOption {
     NewMaster,
     DecryptMaster,
     DestroyMaster,
     NewBootstrap,
+    EditBootstrap,
     NewProfile,
+    EditProfile,
     NewKeySchedule,
+    EditKeySchedule,
     SaveAndExit,
     ExitWithoutSaving,
+
+    // Bootstrap Submenu Options
+    AddServer,
+    RemoveServer,
+    ChangeServerPriority,
+    ChangeServerUsage,
+    // Profile Submenu Options
+
+    // Key Schedule Submenu Options
 }
 
 impl MenuOption {
-    pub fn key(&self) -> KeyCode {
-        match self {
-            Self::NewMaster => KeyCode::Char('m'),
-            Self::DecryptMaster => KeyCode::Char('d'),
-            Self::DestroyMaster => KeyCode::Char('x'),
-            Self::NewBootstrap => KeyCode::Char('b'),
-            Self::NewProfile => KeyCode::Char('p'),
-            Self::NewKeySchedule => KeyCode::Char('k'),
-            Self::SaveAndExit => KeyCode::Char('s'),
-            Self::ExitWithoutSaving => KeyCode::Char('q'),
-        }
-    }
-
-    pub fn from_key(k: KeyCode) -> Option<MenuOption> {
-        match k {
-            KeyCode::Char('m') => Some(Self::NewMaster),
-            KeyCode::Char('d') => Some(Self::DecryptMaster),
-            KeyCode::Char('x') => Some(Self::DestroyMaster),
-            KeyCode::Char('b') => Some(Self::NewBootstrap),
-            KeyCode::Char('p') => Some(Self::NewProfile),
-            KeyCode::Char('k') => Some(Self::NewKeySchedule),
-            KeyCode::Char('s') => Some(Self::SaveAndExit),
-            KeyCode::Char('q') => Some(Self::ExitWithoutSaving),
-            _ => None,
-        }
-    }
-
     pub fn prompt(&self) -> &'static str {
         match self {
             Self::NewMaster => "Generate a new Master Keypair",
             Self::DecryptMaster => "Decrypt your Master Keypair (so we can operate with it)",
             Self::DestroyMaster => "DESTROY your Master Keypair (DANGER!)",
             Self::NewBootstrap => "Generate a new empty Bootstrap",
+            Self::EditBootstrap => "Edit Bootstrap",
             Self::NewProfile => "Generate a new empty Profile",
+            Self::EditProfile => "Edit Profile",
             Self::NewKeySchedule => "Generate a new empty Key Schedule",
+            Self::EditKeySchedule => "Edit Key Schedule",
             Self::SaveAndExit => "Save and Quit",
             Self::ExitWithoutSaving => "Quit Without Saving",
+
+            Self::AddServer => "Add a server",
+            Self::RemoveServer => "Remove a server",
+            Self::ChangeServerPriority => "Change priority of a server",
+            Self::ChangeServerUsage => "Change usage of a server",
         }
     }
 }
 
-pub fn options_from_params(params: &Params) -> Vec<MenuOption> {
+pub fn main_options_from_params(params: &Params) -> Vec<MenuOption> {
     let mut options: Vec<MenuOption> = Vec::new();
 
-    if let Some(_) = params.data.encrypted_master_key {
+    if params.data.encrypted_master_key.is_some() {
         if params.secret_key.is_some() {
-            if let Some(ref _bootstrap) = params.data.bootstrap {
+            if params.data.bootstrap.is_some() {
+                options.push(MenuOption::EditBootstrap);
             } else {
                 options.push(MenuOption::NewBootstrap);
             }
 
-            if let Some(ref _profile) = params.data.profile {
+            if params.data.profile.is_some() {
+                options.push(MenuOption::EditProfile);
             } else {
                 options.push(MenuOption::NewProfile);
             }
 
-            if let Some(ref _key_schedule) = params.data.profile {
+            if params.data.key_schedule.is_some() {
+                options.push(MenuOption::EditKeySchedule);
             } else {
                 options.push(MenuOption::NewKeySchedule);
             }
-
         } else {
             options.push(MenuOption::DecryptMaster);
         }
@@ -173,67 +168,75 @@ pub fn options_from_params(params: &Params) -> Vec<MenuOption> {
     options
 }
 
-pub fn update(mut params: Params) -> Result<(), Box<dyn Error>> {
-    let mut stdout = io::stdout();
-
-    'next_menu:
+pub fn run_main_menu(mut params: Params) -> Result<(), Box<dyn Error>> {
     loop {
-        let options = options_from_params(&params);
-
-        println!("\n-----------------------------------");
-        for option in options.iter() {
-            println!("{}) {}", option.key(), option.prompt());
+        let options = main_options_from_params(&params);
+        let exit = run_menu_once(options, &mut params, 0)?;
+        if exit {
+            return Ok(());
         }
-        print!("> ");
-        stdout.flush()?;
+    }
+}
 
-        'next_keypress:
-        loop {
-            match crossterm::event::read()? {
-                Event::Key(key_event) => {
-                    if let Some(option) = MenuOption::from_key(key_event.code) {
-                        println!("");
-                        if execute(option, &mut params)? {
-                            return Ok(());
-                        }
-                        continue 'next_menu;
-                    } else {
-                        continue 'next_keypress;
-                    }
-                },
-                _ => continue 'next_keypress,
+pub fn run_menu_once(
+    options: Vec<MenuOption>,
+    params: &mut Params,
+    indent: usize,
+) -> Result<bool, Box<dyn Error>> {
+    let indent = "  ".repeat(indent);
+
+    // Print the menu
+    let mut stdout = io::stdout();
+    println!("{}\n-----------------------------------", indent);
+    for (i, option) in options.iter().enumerate() {
+        println!("{}{}) {}", indent, i, option.prompt());
+    }
+    print!("{}> ", indent);
+    stdout.flush()?;
+
+    // Handle one command from the menu
+    loop {
+        if let Event::Key(key_event) = crossterm::event::read()?
+            && let KeyCode::Char(c) = key_event.code
+            && let Some(digit) = c.to_digit(10)
+        {
+            let index = digit as usize;
+            if index < options.len() {
+                println!();
+                let exit = execute(options[index], params)?;
+                return Ok(exit);
             }
         }
     }
 }
 
+// Execute the chosen menu option.
+//
 // Return value 'true' means exit
-pub fn execute(
-    option: MenuOption,
-    params: &mut Params,
-) -> Result<bool,  Box<dyn Error>> {
+pub fn execute(option: MenuOption, params: &mut Params) -> Result<bool, Box<dyn Error>> {
     match option {
         MenuOption::NewMaster => {
             let secret_key = SecretKey::generate();
             let public_key = secret_key.public();
-            let password = rpassword::prompt_password("Enter new password to encrypt your master key: ")?;
+            let password =
+                rpassword::prompt_password("Enter new password to encrypt your master key: ")?;
             println!("Encrypting...");
-            let encrypted_secret_key = EncryptedSecretKey::from_secret_key(&secret_key, &password, 18);
+            let encrypted_secret_key =
+                EncryptedSecretKey::from_secret_key(&secret_key, &password, 18);
             params.data.encrypted_master_key = Some(encrypted_secret_key);
             params.secret_key = Some(secret_key);
             println!("Master Key generated.");
             println!("Your Mosaic Identity is: {}", public_key);
         }
-        MenuOption::DecryptMaster => {
-            match &params.data.encrypted_master_key {
-                Some(e) => {
-                    let password = rpassword::prompt_password("Enter password to decrypt your master key: ")?;
-                    println!("Decrypting...");
-                    params.secret_key = Some(e.to_secret_key(&password)?);
-                },
-                None => panic!("Menu option should not have been there!"),
+        MenuOption::DecryptMaster => match &params.data.encrypted_master_key {
+            Some(e) => {
+                let password =
+                    rpassword::prompt_password("Enter password to decrypt your master key: ")?;
+                println!("Decrypting...");
+                params.secret_key = Some(e.to_secret_key(&password)?);
             }
-        }
+            None => panic!("Menu option should not have been there!"),
+        },
         MenuOption::DestroyMaster => {
             print!("Are you sure (type YES): ");
             io::stdout().flush()?;
@@ -249,13 +252,48 @@ pub fn execute(
             }
         }
         MenuOption::NewBootstrap => {
-            println!("New Bootstrap - not yet implemented.");
+            params.data.bootstrap = Some(UserBootstrap::new());
+        }
+        MenuOption::EditBootstrap => {
+            println!("Not implemented");
+        }
+        MenuOption::AddServer => {
+            let _max_index = params.data.bootstrap.as_ref().unwrap().len();
+
+            print!("Enter server public key: ");
+            io::stdout().flush()?;
+            let stdin = io::stdin();
+            let line = stdin.lock().lines().next().unwrap()?;
+
+            if let Ok(_pk) = PublicKey::from_printable(&line) {
+                println!("NOT YET IMPLEMENTED");
+            } else {
+                println!("Not understood.");
+            }
+
+            // params.data.bootstrap.add_server(pk, usage, priority)
+            println!("Add Server - not yet implemented.");
+        }
+        MenuOption::RemoveServer => {
+            println!("Remove Server - not yet implemented.");
+        }
+        MenuOption::ChangeServerPriority => {
+            println!("Change Server Priority - not yet implemented.");
+        }
+        MenuOption::ChangeServerUsage => {
+            println!("Change Server Usage - not yet implemented.");
         }
         MenuOption::NewProfile => {
             println!("New Profile - not yet implemented.");
         }
+        MenuOption::EditProfile => {
+            println!("Not implemented");
+        }
         MenuOption::NewKeySchedule => {
             println!("New Key Schedule - not yet implemented.");
+        }
+        MenuOption::EditKeySchedule => {
+            println!("Not implemented");
         }
         MenuOption::SaveAndExit => {
             let contents: String = serde_json::to_string(&params.data)?;
